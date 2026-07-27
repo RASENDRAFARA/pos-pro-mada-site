@@ -3,6 +3,7 @@ import cors from 'cors'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import nodemailer from 'nodemailer'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DATA_FILE = path.join(__dirname, 'demo-requests.json')
@@ -11,6 +12,17 @@ const PORT = process.env.PORT || 4000
 const app = express()
 app.use(cors())
 app.use(express.json())
+
+// --- Configuration de l'envoi d'email (Gmail) ---
+// EMAIL_USER et EMAIL_PASS doivent être définis en variables d'environnement sur Render.
+// EMAIL_PASS = un "mot de passe d'application" Gmail (pas ton mot de passe normal).
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.EMAIL_USER, // ex: pjjpascalien@gmail.com
+    pass: process.env.EMAIL_PASS, // mot de passe d'application (16 caractères)
+  },
+})
 
 function readRequests() {
   if (!fs.existsSync(DATA_FILE)) return []
@@ -27,12 +39,36 @@ function saveRequest(entry) {
   fs.writeFileSync(DATA_FILE, JSON.stringify(all, null, 2))
 }
 
+async function sendNotificationEmail(entry) {
+  const destinataire = process.env.EMAIL_USER
+  if (!destinataire) {
+    console.warn('EMAIL_USER non configuré : email non envoyé.')
+    return
+  }
+
+  await transporter.sendMail({
+    from: `"POS PRO MADA — Site web" <${process.env.EMAIL_USER}>`,
+    to: destinataire,
+    subject: `Nouvelle demande de démo — ${entry.nom} (${entry.commerce})`,
+    text: `Nouvelle demande de démo gratuite reçue depuis le site :
+
+Nom : ${entry.nom}
+Type de commerce : ${entry.commerce}
+Ville : ${entry.ville || 'Non renseignée'}
+Téléphone : ${entry.telephone}
+Message : ${entry.message || 'Aucun message'}
+
+Reçu le : ${entry.reçu_le}
+`,
+  })
+}
+
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', service: 'pos-pro-mada-server' })
 })
 
 // Reçoit une demande de démo depuis le formulaire de contact du site
-app.post('/api/contact', (req, res) => {
+app.post('/api/contact', async (req, res) => {
   const { nom, commerce, ville, telephone, message } = req.body || {}
 
   if (!nom || !commerce || !telephone) {
@@ -51,18 +87,28 @@ app.post('/api/contact', (req, res) => {
 
   try {
     saveRequest(entry)
-    // Ici, on pourrait brancher un envoi d'email ou une notification WhatsApp/SMS
-    // vers +261 32 13 590 22 / pjjpascalien@gmail.com.
     console.log('Nouvelle demande de démo reçue :', entry)
+
+    // Envoi de l'email de notification (ne bloque pas la réponse si ça échoue)
+    try {
+      await sendNotificationEmail(entry)
+      console.log('Email de notification envoyé avec succès.')
+    } catch (mailErr) {
+      console.error("Erreur lors de l'envoi de l'email :", mailErr)
+    }
+
     res.status(201).json({ status: 'ok', message: 'Demande enregistrée.' })
   } catch (err) {
-    console.error('Erreur en enregistrant la demande :', err)
+    console.error("Erreur en enregistrant la demande :", err)
     res.status(500).json({ error: "Erreur serveur, réessayez plus tard." })
   }
 })
 
-// Liste des demandes reçues, pour un usage interne (à protéger avant mise en prod)
-app.get('/api/contact', (_req, res) => {
+// Liste des demandes reçues (protégée par une clé simple à passer en paramètre)
+app.get('/api/contact', (req, res) => {
+  if (req.query.key !== process.env.ADMIN_KEY) {
+    return res.status(401).json({ error: 'Non autorisé.' })
+  }
   res.json(readRequests())
 })
 
