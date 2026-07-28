@@ -3,7 +3,7 @@ import cors from 'cors'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import nodemailer from 'nodemailer'
+import { Resend } from 'resend'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DATA_FILE = path.join(__dirname, 'demo-requests.json')
@@ -13,16 +13,10 @@ const app = express()
 app.use(cors())
 app.use(express.json())
 
-// --- Configuration de l'envoi d'email (Gmail) ---
-// EMAIL_USER et EMAIL_PASS doivent être définis en variables d'environnement sur Render.
-// EMAIL_PASS = un "mot de passe d'application" Gmail (pas ton mot de passe normal).
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: process.env.EMAIL_USER, // ex: pjjpascalien@gmail.com
-    pass: process.env.EMAIL_PASS, // mot de passe d'application (16 caractères)
-  },
-})
+// --- Configuration Resend ---
+// RESEND_API_KEY doit être définie en variable d'environnement sur Render.
+// NOTIF_EMAIL = l'adresse qui doit recevoir les notifications (ex: pjjpascalien@gmail.com)
+const resend = new Resend(process.env.RESEND_API_KEY)
 
 function readRequests() {
   if (!fs.existsSync(DATA_FILE)) return []
@@ -40,14 +34,16 @@ function saveRequest(entry) {
 }
 
 async function sendNotificationEmail(entry) {
-  const destinataire = process.env.EMAIL_USER
+  const destinataire = process.env.NOTIF_EMAIL
   if (!destinataire) {
-    console.warn('EMAIL_USER non configuré : email non envoyé.')
+    console.warn('NOTIF_EMAIL non configuré : email non envoyé.')
     return
   }
 
-  await transporter.sendMail({
-    from: `"POS PRO MADA — Site web" <${process.env.EMAIL_USER}>`,
+  const { data, error } = await resend.emails.send({
+    // Tant que tu n'as pas connecté ton propre nom de domaine sur Resend,
+    // l'adresse d'envoi doit rester "onboarding@resend.dev" (adresse de test fournie par Resend).
+    from: 'POS PRO MADA <onboarding@resend.dev>',
     to: destinataire,
     subject: `Nouvelle demande de démo — ${entry.nom} (${entry.commerce})`,
     text: `Nouvelle demande de démo gratuite reçue depuis le site :
@@ -61,6 +57,11 @@ Message : ${entry.message || 'Aucun message'}
 Reçu le : ${entry.reçu_le}
 `,
   })
+
+  if (error) {
+    throw new Error(JSON.stringify(error))
+  }
+  return data
 }
 
 app.get('/api/health', (_req, res) => {
